@@ -65,10 +65,10 @@ all_cities =
   select(-data) %>% 
   unnest() %>% 
   janitor::clean_names() %>% 
+  mutate(OR = exp(estimate)) %>% 
   mutate(upper_ci = exp(estimate + (1.96 * std_error))) %>% 
   mutate(lower_ci = exp(estimate - (1.96 * std_error))) %>% 
   filter(term == "binary_racenon-white") %>% 
-  mutate(OR = exp(estimate)) %>% 
   select(city_state, OR, lower_ci, upper_ci)
 ```
 
@@ -90,3 +90,77 @@ ggplot(ordered_cities, aes(x = city_state, y = OR )) +
   )
 ```
 
+Problem 2 - load and clean data, check for missing data (none found). It is hypothesized that gestational age in weeks (`gaweeks`) will have an effecet on the outcome of birthweight (`bwt`), and I will adjust the factors hypothesized to have  for baby's sex, baby's length, mother's delivery weight(chosen over other mother's weight variables), malformations that could affeect weight, mother's age, number of prior small gestational age babies, and cigarettes per day.
+```{r}
+bwt = read_csv("hw6_data/birthweight.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(blength = as.numeric(blength)) %>% 
+  mutate(delwt = as.numeric(delwt)) %>% 
+  mutate(momage = as.numeric(momage)) %>% 
+  mutate(pnumsga = as.numeric(pnumsga)) %>% 
+  mutate(smoken = as.numeric(smoken))
+  
+
+  filter_all(bwt, any_vars(is.na(.)))
+  
+```
+My model, the association between gestational age (`gaweeks`) and birthweight(`bwt`), adjusting for  baby's sex and length, mother's delivery weight, malformations affecting birth weight, mother's age, previous low-weight children, and cigarettes per day. Because the outcome (bwt) is continuous, we will use a linear regression model
+```{r}
+bwt_model = lm(bwt ~ gaweeks + babysex + blength + delwt  + malform + momage + pnumsga + smoken, data = bwt)
+bwt_model %>% 
+  broom::tidy() 
+```
+Our model showed there is a significant association between gestational week and birthweight when adjusting for the baby's sex and length, mother's delivery weight, malformations affecting birth weight, mother's age, previous low-weight children, and cigarettes for day. (beta = 25.94, p<0.00001)
+
+
+next we plotted residuals against predicted values
+```{r}
+bwt %>% 
+  modelr::add_predictions(bwt_model) %>% 
+  modelr::add_residuals(bwt_model) %>% 
+  ggplot(aes(x = pred, y = resid)) + geom_point() +
+  labs(x = "Prediction", 
+       y = "Residual")
+```
+Next, we compared our model to two others: 
+one using birth length and gestational age as predictors, and one using head circumfrance, length, sex, and all interactions 
+
+```{r}
+comparison_one = lm(bwt ~ blength + gaweeks, data = bwt)
+comparison_two = lm(bwt ~ bhead * blength * babysex, data = bwt)
+```
+
+Cross validation 
+
+```{r, message= FALSE, warning= FALSE}
+set.seed(1)
+cross_validation =
+  crossv_mc(bwt, 100) %>%  
+  mutate(train = map(train, as_tibble)) %>% 
+  mutate(test = map(test, as_tibble)) %>% 
+  mutate(comparison_one = map(train, ~ lm(bwt ~ blength + gaweeks, data = .x))) %>% 
+  mutate(comparison_two = map(train, ~ lm(bwt ~ bhead * blength * babysex, data = .x))) %>% 
+  mutate(bwt_model = map(train, ~ lm(bwt ~ gaweeks + babysex + blength + delwt  + malform + momage + pnumsga +          smoken, data = .x))) %>% 
+  mutate(rmse_comparison_one = map2_dbl(comparison_one, test, ~ rmse(model = .x, data = .y))) %>% 
+  mutate(rmse_comparison_two = map2_dbl(comparison_two, test, ~ rmse(model = .x, data = .y))) %>% 
+  mutate(rmse_bwt_model = map2_dbl(bwt_model, test, ~ rmse(model = .x, data = .y)))
+
+cross_validation %>% 
+  select(starts_with("rmse")) %>% 
+  gather(key = model, value = rmse) %>% 
+   mutate(model = str_replace(model, "rmse_", ""),
+         model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+
+
+cross_validation %>% 
+  select(starts_with("rmse")) %>% 
+  gather(key = model, value = rmse) %>% 
+  group_by(model) %>% 
+  summarize(mean_rmse = mean(rmse)) %>% 
+  arrange(mean_rmse) %>% 
+  knitr::kable(digits = 3)
+```
+```
+
+The RMSE results make it clear that comparison model two, with the interaction terms, has the lowest RMSE and thus is the best model and has the best fit. 
